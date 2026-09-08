@@ -15,6 +15,7 @@ Expected input shapes:
     (i.e. roughly what workbenches_list_assets / list_inventory_items return —
     adapt the extraction helpers below if your export shape differs.)
 """
+import ipaddress
 import json
 import sys
 
@@ -25,7 +26,7 @@ def tenable_keys(asset):
     if hostname:
         keys.add(hostname.lower())
     for ip in asset.get("ipv4", []):
-        keys.add(ip)
+        keys.add(ip.lower())
     return keys
 
 
@@ -36,17 +37,20 @@ def s1_keys(asset):
         keys.add(name.lower())
     ip_address = asset.get("ipAddress")
     if ip_address:
-        keys.add(ip_address)
+        keys.add(ip_address.lower())
     for iface in asset.get("networkInterfaces", []):
         ip = iface.get("ip")
         if ip:
-            keys.add(ip)
+            keys.add(ip.lower())
     return keys
 
 
 def is_ip(key):
-    parts = key.split(".")
-    return len(parts) == 4 and all(p.isdigit() for p in parts)
+    try:
+        ipaddress.ip_address(key)
+        return True
+    except ValueError:
+        return False
 
 
 def classify(tenable_assets, s1_assets):
@@ -55,32 +59,32 @@ def classify(tenable_assets, s1_assets):
         s1_index.append((s1_keys(s1_asset), s1_asset))
 
     matched, ambiguous, tenable_only = [], [], []
-    matched_s1_ids = set()
+    matched_s1_object_ids = set()
 
     for t_asset in tenable_assets:
         t_keys = tenable_keys(t_asset)
-        hostname_hit = False
-        ip_hit = False
-        hit_asset = None
+        hostname_asset = None
+        ip_asset = None
         for keys, s1_asset in s1_index:
             shared = t_keys & keys
             if not shared:
                 continue
-            hit_asset = s1_asset
-            matched_s1_ids.add(s1_asset.get("id"))
+            matched_s1_object_ids.add(id(s1_asset))
             if any(not is_ip(k) for k in shared):
-                hostname_hit = True
+                if hostname_asset is None:
+                    hostname_asset = s1_asset
             else:
-                ip_hit = True
+                if ip_asset is None:
+                    ip_asset = s1_asset
 
-        if hostname_hit:
-            matched.append((t_asset, hit_asset))
-        elif ip_hit:
-            ambiguous.append((t_asset, hit_asset))
+        if hostname_asset is not None:
+            matched.append((t_asset, hostname_asset))
+        elif ip_asset is not None:
+            ambiguous.append((t_asset, ip_asset))
         else:
             tenable_only.append(t_asset)
 
-    s1_only = [a for a in s1_assets if a.get("id") not in matched_s1_ids]
+    s1_only = [a for a in s1_assets if id(a) not in matched_s1_object_ids]
 
     return {
         "matched": matched,
